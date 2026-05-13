@@ -70,30 +70,27 @@ function markAllAgentsDone() {
 let wsReconnectDelay = 1000
 
 function initWebSocket() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(`${proto}//${location.host}`)
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${protocol}//${location.host}`
+  ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
-    wsReconnectDelay = 1000
+    console.log('Connected to ARIA')
     setOrbState('idle')
-    setStatus('active')
   }
 
   ws.onclose = () => {
-    setStatus('disconnected')
     showToast('Connection lost. Reconnecting...', 'warn')
-    setTimeout(() => {
-      wsReconnectDelay = Math.min(wsReconnectDelay * 2, 15000)
-      initWebSocket()
-    }, wsReconnectDelay)
+    setTimeout(initWebSocket, 3000)
   }
 
-  ws.onerror = (err) => console.error('WebSocket error:', err)
+  ws.onerror = (e) => {
+    console.error('WebSocket error:', e)
+  }
 
   ws.onmessage = (event) => {
-    let msg
-    try { msg = JSON.parse(event.data) } catch { return }
-    handleServerMessage(msg)
+    const message = JSON.parse(event.data)
+    handleServerMessage(message)
   }
 }
 
