@@ -189,9 +189,8 @@ function onSpeechQueueDone(msg) {
   isSpeakingStream = false
   setOrbState('idle')
   resetAgentSteps()
-  if (!pendingConfirm) {
-    setTimeout(() => startListening(), 300)
-  }
+  setVoiceLabel('tap to speak')
+  // Do NOT call startListening() here
 }
 
 // ─── TTS Speech Queue ─────────────────────────────────────────────────────
@@ -353,6 +352,18 @@ function submitFinalTranscript() {
   const text = finalTranscriptBuffer.trim()
   if (!text) return
   finalTranscriptBuffer = ''
+  if (text.split(/\s+/).length < 2) {
+    isListening = false
+    isProcessing = false
+    setOrbState('idle')
+    return
+  }
+  if (isSpeaking || isSpeakingStream) {
+    isListening = false
+    isProcessing = false
+    setOrbState('idle')
+    return
+  }
   clearInterimBubble()
   addBubble('user', text)
   isListening = false
@@ -365,7 +376,7 @@ function submitFinalTranscript() {
 }
 
 function startListening() {
-  if (!recognition || isProcessing || isSpeaking) return
+  if (!recognition || isProcessing || isSpeaking || isSpeakingStream) return
   if (recognitionActive) return
   isListening = true
   finalTranscriptBuffer = ''
