@@ -773,11 +773,12 @@ function renderTasks() {
     }
 
     let dateLabel = ''
-    if (task.date === today) dateLabel = 'Today'
+    if (!task.date) dateLabel = ''
+    else if (task.date === today) dateLabel = 'Today'
     else if (task.date === tomorrow) dateLabel = 'Tomorrow'
     else {
       const d = new Date(task.date + 'T00:00:00')
-      dateLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      dateLabel = isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     }
 
     let timeLabel = ''
@@ -808,6 +809,29 @@ function renderTasks() {
     taskList.appendChild(el)
   }
 }
+
+taskList.addEventListener('click', async (e) => {
+  const checkbox = e.target.closest('.task-checkbox')
+  if (!checkbox) return
+  const el = checkbox.closest('.task-item')
+  if (!el) return
+  const id = parseInt(el.dataset.id)
+  const task = tasks.find(t => t.id === id)
+  if (!task) return
+  const newStatus = task.status === 'done' ? 'active' : 'done'
+  task.status = newStatus
+  renderTasks()
+  try {
+    await fetch(`/api/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus })
+    })
+  } catch (err) {
+    task.status = newStatus === 'done' ? 'active' : 'done'
+    renderTasks()
+  }
+})
 
 function highlightTasks(ids) {
   lastHighlightedTaskIds = ids
