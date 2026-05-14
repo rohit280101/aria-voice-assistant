@@ -142,16 +142,19 @@ wss.on('connection', async (ws) => {
         const isNo = /\b(no|nope|cancel|stop|nevermind|never mind|don't|dont)\b/.test(lower)
 
         if (isYes) {
-          const op = state.pendingConfirmation
-          op.confirmed = true
+          const pendingPlan = state.pendingConfirmation
           state.pendingConfirmation = null
+
+          pendingPlan.operations.forEach(op => {
+            if (op.requiresConfirmation) op.confirmed = true
+          })
 
           const ctx = {
             userMessage: userText,
             history: effectiveHistory,
             tasks: [],
             intent: null,
-            plan: { operations: [op], readFilter: null, planSummary: `Delete confirmed by user` },
+            plan: { ...pendingPlan, planSummary: 'Delete confirmed by user' },
             result: null,
             speech: ''
           }
@@ -216,16 +219,17 @@ wss.on('connection', async (ws) => {
       send(ws, { type: 'agent_update', agent: 'planner', data: afterPlan.plan })
 
       // Check if any op needs confirmation
-      const confirmOp = afterPlan.plan.operations.find(op => op.requiresConfirmation)
-      if (confirmOp) {
-        state.pendingConfirmation = confirmOp
+      const confirmOps = afterPlan.plan.operations.filter(op => op.requiresConfirmation)
+      if (confirmOps.length > 0) {
+        state.pendingConfirmation = afterPlan.plan
 
-        // Find the task name for UX display
-        let taskTitle = 'this task'
-        if (confirmOp.taskId) {
-          const found = tasksResult.rows.find(t => t.id === confirmOp.taskId)
-          if (found) taskTitle = found.title
-        }
+        // Build task title for UX display
+        const confirmTitles = confirmOps
+          .map(op => op.taskId ? (tasksResult.rows.find(t => t.id === op.taskId) || {}).title : null)
+          .filter(Boolean)
+        const taskTitle = confirmTitles.length === 1
+          ? confirmTitles[0]
+          : `all ${confirmOps.length} tasks`
 
         const confirmCtx = {
           ...afterPlan,

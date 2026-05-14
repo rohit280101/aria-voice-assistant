@@ -10,9 +10,11 @@ function formatTasksForSpeech(tasks) {
 
   const fmt = tasks.slice(0, 8).map(t => {
     let when = ''
-    if (t.date === today) when = 'today'
-    else if (t.date === tomorrow) when = 'tomorrow'
-    else when = `on ${t.date}`
+    const taskDate = t.date ? String(t.date).split('T')[0] : null
+    if (!taskDate) when = ''
+    else if (taskDate === today) when = 'today'
+    else if (taskDate === tomorrow) when = 'tomorrow'
+    else when = `on ${taskDate}`
 
     if (t.time) {
       const [h, m] = t.time.split(':')

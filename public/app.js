@@ -12,7 +12,6 @@ let ws = null
 let speechQueue = []
 let isSpeakingStream = false
 let currentUtterance = null
-let pendingConfirm = false
 let lastHighlightedTaskIds = []
 let suppressAutoRestart = false
 
@@ -200,7 +199,6 @@ function handleServerMessage(msg) {
       break
 
     case 'confirm_required':
-      pendingConfirm = true
       confirmTask.textContent = msg.taskTitle || ''
       confirmMsg.textContent = 'Are you sure you want to delete this task?'
       confirmOverlay.classList.add('visible')
@@ -595,6 +593,7 @@ function dispatchUserText(text) {
   const trimmed = (text || '').trim()
   if (!trimmed) return
   if (isProcessing) return
+  confirmOverlay.classList.remove('visible')
   clearInterimBubble()
   addBubble('user', trimmed)
   isListening = false
@@ -746,8 +745,8 @@ function renderTasks() {
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
 
   let filtered = [...tasks]
-  if (currentFilter === 'today') filtered = tasks.filter(t => t.date === today)
-  else if (currentFilter === 'tomorrow') filtered = tasks.filter(t => t.date === tomorrow)
+  if (currentFilter === 'today') filtered = tasks.filter(t => t.date && String(t.date).split('T')[0] === today)
+  else if (currentFilter === 'tomorrow') filtered = tasks.filter(t => t.date && String(t.date).split('T')[0] === tomorrow)
   else if (currentFilter === 'done') filtered = tasks.filter(t => t.status === 'done')
   else filtered = tasks
 
@@ -772,12 +771,13 @@ function renderTasks() {
       el.classList.add('highlighted')
     }
 
+    const taskDateStr = task.date ? String(task.date).split('T')[0] : null
     let dateLabel = ''
-    if (!task.date) dateLabel = ''
-    else if (task.date === today) dateLabel = 'Today'
-    else if (task.date === tomorrow) dateLabel = 'Tomorrow'
+    if (!taskDateStr) dateLabel = ''
+    else if (taskDateStr === today) dateLabel = 'Today'
+    else if (taskDateStr === tomorrow) dateLabel = 'Tomorrow'
     else {
-      const d = new Date(task.date + 'T00:00:00')
+      const d = new Date(taskDateStr + 'T00:00:00')
       dateLabel = isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     }
 
@@ -815,10 +815,10 @@ taskList.addEventListener('click', async (e) => {
   if (!checkbox) return
   const el = checkbox.closest('.task-item')
   if (!el) return
-  const id = parseInt(el.dataset.id)
+  const id = el.dataset.id
   const task = tasks.find(t => t.id === id)
   if (!task) return
-  const newStatus = task.status === 'done' ? 'active' : 'done'
+  const newStatus = task.status === 'done' ? 'pending' : 'done'
   task.status = newStatus
   renderTasks()
   try {
@@ -828,7 +828,7 @@ taskList.addEventListener('click', async (e) => {
       body: JSON.stringify({ status: newStatus })
     })
   } catch (err) {
-    task.status = newStatus === 'done' ? 'active' : 'done'
+    task.status = newStatus === 'done' ? 'pending' : 'done'
     renderTasks()
   }
 })
