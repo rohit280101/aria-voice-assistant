@@ -14,25 +14,49 @@ let isSpeakingStream = false
 let currentUtterance = null
 let pendingConfirm = false
 let lastHighlightedTaskIds = []
+let suppressAutoRestart = false
+
+const SILENCE_TIMER_MS = 1800
+const SEND_TRIGGER_RE = /\b(send|submit)\b\s*[.,!?]*\s*$/i
+
+// ─── Hands-Free Mode ──────────────────────────────────────────────────────
+let handsFreeMode = localStorage.getItem('aria-handsfree') === 'true'
+
+// ─── Conversation History (client-side authoritative) ────────────────────
+const MAX_HISTORY_MESSAGES = 16 // 8 turns × 2 messages
+let conversationHistory = []
+let lastUserText = ''
+
+function pushHistory(role, content) {
+  conversationHistory.push({ role, content })
+  while (conversationHistory.length > MAX_HISTORY_MESSAGES) {
+    conversationHistory.shift()
+  }
+}
 
 // ─── DOM Refs ─────────────────────────────────────────────────────────────
-const voiceBtn       = document.getElementById('voiceBtn')
-const voiceLabel     = document.getElementById('voiceLabel')
-const voiceOrb       = voiceBtn.closest('.voice-orb-container').parentElement
-const transcriptArea = document.getElementById('transcriptArea')
-const taskList       = document.getElementById('taskList')
-const taskCount      = document.getElementById('taskCount')
-const statusDot      = document.getElementById('statusDot')
-const statusText     = document.getElementById('statusText')
-const confirmOverlay = document.getElementById('confirmOverlay')
-const confirmMsg     = document.getElementById('confirmMsg')
-const confirmTask    = document.getElementById('confirmTask')
-const intrBanner     = document.getElementById('intrBanner')
-const toast          = document.getElementById('toast')
-const toastMsg       = document.getElementById('toastMsg')
-const toastIcon      = document.getElementById('toastIcon')
-const noSttBanner    = document.getElementById('noSttBanner')
-const voiceCenter    = document.querySelector('.voice-center')
+const voiceBtn        = document.getElementById('voiceBtn')
+const voiceLabel      = document.getElementById('voiceLabel')
+const voiceOrb        = voiceBtn.closest('.voice-orb-container').parentElement
+const transcriptArea  = document.getElementById('transcriptArea')
+const taskList        = document.getElementById('taskList')
+const taskCount       = document.getElementById('taskCount')
+const statusDot       = document.getElementById('statusDot')
+const statusText      = document.getElementById('statusText')
+const confirmOverlay  = document.getElementById('confirmOverlay')
+const confirmMsg      = document.getElementById('confirmMsg')
+const confirmTask     = document.getElementById('confirmTask')
+const intrBanner      = document.getElementById('intrBanner')
+const toast           = document.getElementById('toast')
+const toastMsg        = document.getElementById('toastMsg')
+const toastIcon       = document.getElementById('toastIcon')
+const noSttBanner     = document.getElementById('noSttBanner')
+const voiceCenter     = document.querySelector('.voice-center')
+const handsfreeBtn    = document.getElementById('handsfreeBtn')
+const typingBar       = document.getElementById('typingBar')
+const typingInput     = document.getElementById('typingInput')
+const typingSendBtn   = document.getElementById('typingSendBtn')
+const typingToggleBtn = document.getElementById('typingToggleBtn')
 
 // ─── Agent Pipeline UI ────────────────────────────────────────────────────
 const agentSteps = {
@@ -66,8 +90,21 @@ function markAllAgentsDone() {
   }
 }
 
-// ─── WebSocket ────────────────────────────────────────────────────────────
+// ─── WebSocket (with exponential backoff) ─────────────────────────────────
 let wsReconnectDelay = 1000
+let wsReconnectTimer = null
+let wsCountdownInterval = null
+
+function clearWsReconnect() {
+  if (wsCountdownInterval) {
+    clearInterval(wsCountdownInterval)
+    wsCountdownInterval = null
+  }
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer)
+    wsReconnectTimer = null
+  }
+}
 
 function initWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -76,12 +113,15 @@ function initWebSocket() {
 
   ws.onopen = () => {
     console.log('Connected to ARIA')
+    wsReconnectDelay = 1000
+    clearWsReconnect()
     setOrbState('idle')
   }
 
   ws.onclose = () => {
-    showToast('Connection lost. Reconnecting...', 'warn')
-    setTimeout(initWebSocket, 3000)
+    clearWsReconnect()
+    setStatus('disconnected')
+    scheduleReconnect()
   }
 
   ws.onerror = (e) => {
@@ -94,6 +134,34 @@ function initWebSocket() {
   }
 }
 
+function scheduleReconnect() {
+  let secondsLeft = Math.max(1, Math.round(wsReconnectDelay / 1000))
+  statusDot.className = 'status-dot'
+  statusText.textContent = `reconnecting in ${secondsLeft}s...`
+
+  clearWsReconnect()
+  wsCountdownInterval = setInterval(() => {
+    secondsLeft--
+    if (secondsLeft <= 0) {
+      clearInterval(wsCountdownInterval)
+      wsCountdownInterval = null
+      statusText.textContent = 'reconnecting...'
+      return
+    }
+    statusText.textContent = `reconnecting in ${secondsLeft}s...`
+  }, 1000)
+
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null
+    if (wsCountdownInterval) {
+      clearInterval(wsCountdownInterval)
+      wsCountdownInterval = null
+    }
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000)
+    initWebSocket()
+  }, wsReconnectDelay)
+}
+
 function sendMessage(type, data = {}) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, ...data }))
@@ -103,12 +171,14 @@ function sendMessage(type, data = {}) {
 // ─── Server Message Handler ───────────────────────────────────────────────
 let speechBuffer = ''
 let firstToken = true
+let pendingSpeechCompleteMsg = null
 
 function handleServerMessage(msg) {
   switch (msg.type) {
 
     case 'connected':
       addBubble('ai', "Hi! I'm ARIA. Tap the orb and tell me what you'd like to do.")
+      if (handsFreeMode) maybeResumeListening(400)
       break
 
     case 'tasks_updated':
@@ -145,6 +215,7 @@ function handleServerMessage(msg) {
         setOrbState('speaking')
         isSpeaking = true
         isSpeakingStream = true
+        startVAD()
       }
       speechBuffer += msg.token
       const shouldSpeak = /[.!?,]/.test(msg.token) || speechBuffer.length > 80
@@ -156,41 +227,55 @@ function handleServerMessage(msg) {
 
     case 'speech_complete':
       markAllAgentsDone()
+      firstToken = true
+      pendingSpeechCompleteMsg = msg   // set before enqueueSpeech so processQueue can use it
       if (speechBuffer) {
         enqueueSpeech(speechBuffer, true)
         speechBuffer = ''
-      } else {
+      } else if (speechQueue.length === 0 && !currentUtterance) {
+        // Queue already drained — fire immediately
         onSpeechQueueDone(msg)
+        pendingSpeechCompleteMsg = null
       }
+      // else: queue still draining; processQueue will call onSpeechQueueDone when empty
       if (msg.fullText) {
         addBubble('ai', msg.fullText)
+        if (lastUserText) {
+          pushHistory('user', lastUserText)
+          pushHistory('assistant', msg.fullText)
+          lastUserText = ''
+        }
       }
       if (msg.affectedTaskIds && msg.affectedTaskIds.length > 0) {
         highlightTasks(msg.affectedTaskIds)
       }
-      firstToken = true
-      speechBuffer = ''
-      pendingSpeechCompleteMsg = msg
       break
 
     case 'error':
       isProcessing = false
       setOrbState('idle')
       showToast(msg.message || 'An error occurred', 'danger')
-      speak('Something went wrong. Please try again.', () => startListening())
+      speak('Something went wrong. Please try again.', () => {
+        if (!maybeResumeListening(150)) startListening()
+      })
       break
   }
 }
 
-let pendingSpeechCompleteMsg = null
-
 function onSpeechQueueDone(msg) {
   isSpeaking = false
   isSpeakingStream = false
+  stopVAD()
   setOrbState('idle')
   resetAgentSteps()
-  setVoiceLabel('tap to speak')
-  // Do NOT call startListening() here
+  if (handsFreeMode) {
+    setVoiceLabel('listening...')
+    setTimeout(() => {
+      if (!isListening && !isProcessing && !isSpeaking && !isSpeakingStream) {
+        startListening()
+      }
+    }, 300)
+  }
 }
 
 // ─── TTS Speech Queue ─────────────────────────────────────────────────────
@@ -254,6 +339,7 @@ function speak(text, onEnd) {
   clearSpeechQueue()
   isSpeaking = true
   setOrbState('speaking')
+  startVAD()
   const utt = new SpeechSynthesisUtterance(text)
   utt.rate = 1.0
   utt.pitch = 1.0
@@ -261,12 +347,14 @@ function speak(text, onEnd) {
   utt.onend = () => {
     currentUtterance = null
     isSpeaking = false
+    stopVAD()
     setOrbState('idle')
     onEnd && onEnd()
   }
   utt.onerror = () => {
     currentUtterance = null
     isSpeaking = false
+    stopVAD()
     setOrbState('idle')
     onEnd && onEnd()
   }
@@ -285,6 +373,93 @@ function clearSpeechQueue() {
   speechQueue = []
 }
 
+// ─── Voice Activity Detection (Barge-In) ──────────────────────────────────
+let vadStream = null
+let vadAudioContext = null
+let vadAnalyser = null
+let vadRafId = null
+let vadAboveThresholdSince = 0
+let vadStarting = false
+const VAD_RMS_THRESHOLD = 0.015
+const VAD_TRIGGER_MS = 300
+
+async function startVAD() {
+  if (vadAudioContext || vadStarting) return
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return
+  vadStarting = true
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    // If speaking ended while we were waiting on permission, abort.
+    if (!isSpeaking && !isSpeakingStream) {
+      stream.getTracks().forEach(t => t.stop())
+      return
+    }
+    vadStream = stream
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    vadAudioContext = new AudioCtx()
+    const source = vadAudioContext.createMediaStreamSource(vadStream)
+    vadAnalyser = vadAudioContext.createAnalyser()
+    vadAnalyser.fftSize = 512
+    source.connect(vadAnalyser)
+
+    const buffer = new Float32Array(vadAnalyser.fftSize)
+    vadAboveThresholdSince = 0
+
+    const tick = () => {
+      if (!vadAnalyser) return
+      vadAnalyser.getFloatTimeDomainData(buffer)
+      let sum = 0
+      for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i]
+      const rms = Math.sqrt(sum / buffer.length)
+
+      const now = performance.now()
+      if (rms > VAD_RMS_THRESHOLD) {
+        if (vadAboveThresholdSince === 0) vadAboveThresholdSince = now
+        if (now - vadAboveThresholdSince > VAD_TRIGGER_MS) {
+          handleBargeIn()
+          return
+        }
+      } else {
+        vadAboveThresholdSince = 0
+      }
+      vadRafId = requestAnimationFrame(tick)
+    }
+    vadRafId = requestAnimationFrame(tick)
+  } catch (e) {
+    console.warn('VAD start failed:', e && e.message)
+  } finally {
+    vadStarting = false
+  }
+}
+
+function stopVAD() {
+  if (vadRafId) { cancelAnimationFrame(vadRafId); vadRafId = null }
+  if (vadAnalyser) { try { vadAnalyser.disconnect() } catch {} ; vadAnalyser = null }
+  if (vadAudioContext) {
+    try { vadAudioContext.close() } catch {}
+    vadAudioContext = null
+  }
+  if (vadStream) {
+    vadStream.getTracks().forEach(t => { try { t.stop() } catch {} })
+    vadStream = null
+  }
+  vadAboveThresholdSince = 0
+}
+
+function handleBargeIn() {
+  if (!isSpeaking && !isSpeakingStream) { stopVAD(); return }
+  stopVAD()
+  stopSpeaking()
+  clearSpeechQueue()
+  isSpeaking = false
+  isSpeakingStream = false
+  pendingSpeechCompleteMsg = null
+  showInterruption()
+  setOrbState('idle')
+  resetAgentSteps()
+  setTimeout(() => startListening(), 150)
+}
+
 // ─── STT Recognition ──────────────────────────────────────────────────────
 function initRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -301,6 +476,7 @@ function initRecognition() {
   recognition.onstart = () => {
     recognitionActive = true
     isListening = true
+    suppressAutoRestart = false
     setOrbState('listening')
     setVoiceLabel('listening...')
     finalTranscriptBuffer = ''
@@ -308,17 +484,40 @@ function initRecognition() {
 
   recognition.onresult = (event) => {
     let interim = ''
+    let lastFinalChunk = ''
+
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const result = event.results[i]
       if (result.isFinal) {
-        finalTranscriptBuffer += result[0].transcript + ' '
+        const chunk = result[0].transcript
+        finalTranscriptBuffer += chunk + ' '
+        lastFinalChunk = chunk
         clearTimeout(silenceTimer)
-        silenceTimer = setTimeout(submitFinalTranscript, 1200)
+        silenceTimer = setTimeout(submitFinalTranscript, SILENCE_TIMER_MS)
       } else {
         interim += result[0].transcript
       }
     }
+
+    // "send" / "submit" voice command — fire immediately, skip silence wait.
+    let triggeredSend = false
+    if (lastFinalChunk && SEND_TRIGGER_RE.test(lastFinalChunk.trim())) {
+      finalTranscriptBuffer = finalTranscriptBuffer.replace(SEND_TRIGGER_RE, '').trim() + ' '
+      clearTimeout(silenceTimer)
+      triggeredSend = true
+    }
+
+    // Voice label: "got it..." after finalization; revert to "listening..."
+    // when only fresh interim arrives (user resumed speaking after a pause).
+    if (lastFinalChunk) {
+      setVoiceLabel('got it...')
+    } else if (interim) {
+      setVoiceLabel('listening...')
+    }
+
     updateInterimBubble(interim || finalTranscriptBuffer)
+
+    if (triggeredSend) submitFinalTranscript()
   }
 
   recognition.onerror = (event) => {
@@ -331,53 +530,87 @@ function initRecognition() {
     recognitionActive = false
     isListening = false
     setOrbState('idle')
-    setVoiceLabel('tap to speak')
+    setVoiceLabel(handsFreeMode ? 'tap to resume' : 'tap to speak')
   }
 
   recognition.onend = () => {
     recognitionActive = false
     if (isListening && !isProcessing) {
       try { recognition.start() } catch {}
-    } else {
-      isListening = false
-      if (!isProcessing && !isSpeaking) {
-        setOrbState('idle')
-        setVoiceLabel('tap to speak')
-      }
+      return
+    }
+    if (
+      handsFreeMode &&
+      !suppressAutoRestart &&
+      !isProcessing &&
+      !isSpeaking &&
+      !isSpeakingStream
+    ) {
+      setTimeout(() => {
+        if (
+          handsFreeMode &&
+          !suppressAutoRestart &&
+          !isListening &&
+          !isProcessing &&
+          !isSpeaking &&
+          !isSpeakingStream
+        ) {
+          startListening()
+        }
+      }, 200)
+      return
+    }
+    isListening = false
+    if (!isProcessing && !isSpeaking) {
+      setOrbState('idle')
+      setVoiceLabel(handsFreeMode ? 'tap to resume' : 'tap to speak')
     }
   }
 }
 
 function submitFinalTranscript() {
   const text = finalTranscriptBuffer.trim()
-  if (!text) return
   finalTranscriptBuffer = ''
+  if (!text) {
+    isListening = false
+    setOrbState('idle')
+    maybeResumeListening(300)
+    return
+  }
   if (text.split(/\s+/).length < 2) {
     isListening = false
-    isProcessing = false
     setOrbState('idle')
+    maybeResumeListening(300)
     return
   }
   if (isSpeaking || isSpeakingStream) {
     isListening = false
-    isProcessing = false
     setOrbState('idle')
     return
   }
+  dispatchUserText(text)
+}
+
+function dispatchUserText(text) {
+  const trimmed = (text || '').trim()
+  if (!trimmed) return
+  if (isProcessing) return
   clearInterimBubble()
-  addBubble('user', text)
+  addBubble('user', trimmed)
   isListening = false
   isProcessing = true
   stopListening()
   setOrbState('processing')
   setVoiceLabel('processing...')
   resetAgentSteps()
-  sendMessage('user_message', { text })
+  lastUserText = trimmed
+  sendMessage('user_message', { text: trimmed, history: conversationHistory.slice() })
 }
 
 function startListening() {
   if (!recognition || isProcessing || isSpeaking || isSpeakingStream) return
   if (recognitionActive) return
+  suppressAutoRestart = false
   isListening = true
   finalTranscriptBuffer = ''
   try { recognition.start() } catch {}
@@ -385,21 +618,42 @@ function startListening() {
 
 function stopListening() {
   isListening = false
+  suppressAutoRestart = true
   if (recognitionActive) {
     try { recognition.stop() } catch {}
   }
 }
 
+function maybeResumeListening(delay = 300) {
+  if (!handsFreeMode) return false
+  if (isProcessing || isSpeaking || isSpeakingStream) return false
+  setTimeout(() => {
+    if (
+      handsFreeMode &&
+      !isListening &&
+      !isProcessing &&
+      !isSpeaking &&
+      !isSpeakingStream
+    ) {
+      startListening()
+    }
+  }, delay)
+  return true
+}
+
 // ─── Toggle / Interruption ────────────────────────────────────────────────
 function toggleListening() {
   if (isSpeaking || isSpeakingStream) {
+    stopVAD()
     stopSpeaking()
     clearSpeechQueue()
     isSpeaking = false
     isSpeakingStream = false
     isProcessing = false
+    pendingSpeechCompleteMsg = null
     showInterruption()
     setOrbState('idle')
+    resetAgentSteps()
     setTimeout(() => startListening(), 200)
     return
   }
@@ -407,7 +661,7 @@ function toggleListening() {
   if (isListening) {
     stopListening()
     setOrbState('idle')
-    setVoiceLabel('tap to speak')
+    setVoiceLabel(handsFreeMode ? 'tap to resume' : 'tap to speak')
   } else {
     startListening()
   }
@@ -427,7 +681,7 @@ function setOrbState(state) {
   if (state === 'listening') setVoiceLabel('listening...')
   else if (state === 'processing') setVoiceLabel('processing...')
   else if (state === 'speaking') setVoiceLabel('speaking...')
-  else setVoiceLabel('tap to speak')
+  else setVoiceLabel(handsFreeMode ? 'tap to resume' : 'tap to speak')
 
   if (state === 'processing') {
     statusDot.className = 'status-dot processing'
@@ -576,6 +830,28 @@ function escHtml(str) {
     .replace(/"/g, '&quot;')
 }
 
+// ─── Hands-Free UI ────────────────────────────────────────────────────────
+function applyHandsFreeUI() {
+  handsfreeBtn.classList.toggle('active', handsFreeMode)
+  handsfreeBtn.setAttribute('aria-pressed', handsFreeMode ? 'true' : 'false')
+}
+
+function toggleHandsFree() {
+  handsFreeMode = !handsFreeMode
+  localStorage.setItem('aria-handsfree', handsFreeMode ? 'true' : 'false')
+  applyHandsFreeUI()
+  showToast(handsFreeMode ? 'Hands-free mode on' : 'Hands-free mode off', handsFreeMode ? 'success' : 'info')
+  if (handsFreeMode) {
+    maybeResumeListening(200)
+  }
+  if (!isListening && !isProcessing && !isSpeaking && !isSpeakingStream) {
+    setVoiceLabel(handsFreeMode ? 'listening...' : 'tap to speak')
+  }
+}
+
+handsfreeBtn.addEventListener('click', toggleHandsFree)
+applyHandsFreeUI()
+
 // ─── Filters ──────────────────────────────────────────────────────────────
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -587,22 +863,95 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 })
 
 // ─── Hint Chips ───────────────────────────────────────────────────────────
-document.querySelectorAll('.hint-chip').forEach(btn => {
+document.querySelectorAll('.hint-chip[data-hint]').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (isProcessing || isSpeaking) return
+    if (isProcessing || isSpeaking || isSpeakingStream) return
     const text = btn.dataset.hint
     if (!text) return
-    stopListening()
-    addBubble('user', text)
-    isProcessing = true
-    setOrbState('processing')
-    resetAgentSteps()
-    sendMessage('user_message', { text })
+    dispatchUserText(text)
   })
+})
+
+// ─── Typing Fallback Input ────────────────────────────────────────────────
+function submitTyped() {
+  const text = typingInput.value.trim()
+  if (!text) return
+  typingInput.value = ''
+  if (isSpeaking || isSpeakingStream) {
+    // Interrupt current speech if user typed during it
+    stopVAD()
+    stopSpeaking()
+    clearSpeechQueue()
+    isSpeaking = false
+    isSpeakingStream = false
+    pendingSpeechCompleteMsg = null
+    resetAgentSteps()
+  }
+  dispatchUserText(text)
+}
+
+typingSendBtn.addEventListener('click', submitTyped)
+typingInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    submitTyped()
+  }
+})
+
+typingToggleBtn.addEventListener('click', () => {
+  const isHidden = typingBar.hasAttribute('hidden')
+  if (isHidden) {
+    typingBar.removeAttribute('hidden')
+    typingToggleBtn.classList.add('active')
+    setTimeout(() => typingInput.focus(), 0)
+  } else {
+    typingBar.setAttribute('hidden', '')
+    typingToggleBtn.classList.remove('active')
+    typingInput.blur()
+  }
 })
 
 // ─── Voice Button ─────────────────────────────────────────────────────────
 voiceBtn.addEventListener('click', toggleListening)
+
+// ─── Keyboard Shortcuts ───────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  const focused = document.activeElement
+  const focusedTag = focused?.tagName
+  const isTyping = focusedTag === 'INPUT' || focusedTag === 'TEXTAREA'
+  const isButton = focusedTag === 'BUTTON'
+  const hasMod = e.metaKey || e.ctrlKey || e.altKey
+
+  if (e.code === 'Space' && !isTyping && !isButton && !hasMod && !e.repeat) {
+    e.preventDefault()
+    toggleListening()
+    return
+  }
+
+  if (e.key === 'Escape') {
+    if (isSpeaking || isSpeakingStream || isProcessing) {
+      stopVAD()
+      stopSpeaking()
+      clearSpeechQueue()
+      isSpeaking = false
+      isSpeakingStream = false
+      isProcessing = false
+      pendingSpeechCompleteMsg = null
+      resetAgentSteps()
+      setOrbState('idle')
+    } else if (isListening) {
+      stopListening()
+      setOrbState('idle')
+      setVoiceLabel(handsFreeMode ? 'tap to resume' : 'tap to speak')
+    }
+    return
+  }
+
+  if ((e.key === 'h' || e.key === 'H') && !isTyping && !hasMod) {
+    e.preventDefault()
+    toggleHandsFree()
+  }
+})
 
 // ─── Toast ────────────────────────────────────────────────────────────────
 let toastTimer = null
@@ -628,3 +977,4 @@ setInterval(() => sendMessage('ping'), 20000)
 initRecognition()
 initWebSocket()
 setOrbState('idle')
+if (handsFreeMode) setVoiceLabel('listening...')

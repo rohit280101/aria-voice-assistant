@@ -13,6 +13,11 @@
   <header>
     <div class="logo">ARIA <span>Voice Task Manager</span></div>
     <div class="header-right">
+      <button class="handsfree-toggle" id="handsfreeBtn" type="button" title="Toggle hands-free mode (H)" aria-pressed="false">
+        <span class="handsfree-icon" aria-hidden="true">🎙️</span>
+        <span class="handsfree-label">Hands-free</span>
+        <span class="handsfree-indicator" aria-hidden="true"></span>
+      </button>
       <div class="agent-pipeline" id="agentPipeline" title="Agent pipeline status">
         <div class="agent-step" id="agentConversation" title="Conversation Agent">C</div>
         <div class="agent-step" id="agentPlanner" title="Planner Agent">P</div>
@@ -74,13 +79,21 @@
       <div class="voice-state-label" id="voiceLabel">tap to speak</div>
       <div class="transcript-area" id="transcriptArea"></div>
 
+      <div class="typing-bar" id="typingBar" hidden>
+        <input type="text" id="typingInput" placeholder="Type a message..." autocomplete="off" />
+        <button class="typing-send-btn" id="typingSendBtn" type="button" aria-label="Send message">➤</button>
+      </div>
+
       <div class="bottom-hints">
         <button class="hint-chip" data-hint="Create a task for team sync at 10 AM tomorrow">+ create</button>
         <button class="hint-chip" data-hint="What are my tasks for today?">read tasks</button>
         <button class="hint-chip" data-hint="Mark the first task as done">complete</button>
         <button class="hint-chip" data-hint="Delete all completed tasks">delete</button>
         <button class="hint-chip" data-hint="What is on my agenda this morning?">agenda</button>
+        <button class="hint-chip kbd-toggle" id="typingToggleBtn" type="button" title="Type instead of speaking" aria-label="Toggle typing input">⌨</button>
       </div>
+
+      <div class="kbd-shortcuts-hint" aria-hidden="true">Space to speak · Esc to stop · H for hands-free</div>
     </div>
   </main>
 

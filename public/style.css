@@ -65,6 +65,59 @@ header {
   gap: 1rem;
 }
 
+/* ─── Hands-Free Toggle ──────────────────────────────────────────────────── */
+.handsfree-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  padding: 0.35rem 0.7rem 0.35rem 0.6rem;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+  white-space: nowrap;
+  outline: none;
+}
+.handsfree-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent2);
+  background: var(--accent-glow);
+}
+.handsfree-toggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.handsfree-toggle .handsfree-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+  filter: grayscale(0.6);
+  transition: filter 0.25s ease;
+}
+.handsfree-toggle .handsfree-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text3);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+.handsfree-toggle.active {
+  border-color: var(--success);
+  background: rgba(104,211,145,0.08);
+  color: var(--success);
+}
+.handsfree-toggle.active .handsfree-icon { filter: none; }
+.handsfree-toggle.active .handsfree-indicator {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+  animation: blink 1.4s ease-in-out infinite;
+}
+
 /* ─── Agent Pipeline ─────────────────────────────────────────────────────── */
 .agent-pipeline {
   display: flex;
@@ -578,6 +631,65 @@ main {
   font-size: 0.72rem;
 }
 
+/* ─── Typing Fallback ────────────────────────────────────────────────────── */
+.typing-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 520px;
+  padding: 0 2rem;
+  z-index: 1;
+}
+.typing-bar[hidden] { display: none; }
+
+.typing-bar input {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+.typing-bar input::placeholder {
+  color: var(--text3);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+}
+.typing-bar input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.typing-send-btn {
+  background: var(--accent-glow);
+  border: 1px solid var(--accent);
+  color: var(--accent2);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-family: var(--mono);
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+.typing-send-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+  transform: translateY(-1px);
+}
+.typing-send-btn:active { transform: translateY(0); }
+
 /* ─── Hint Chips ─────────────────────────────────────────────────────────── */
 .bottom-hints {
   display: flex;
@@ -605,6 +717,33 @@ main {
   background: var(--accent-glow);
   border-color: var(--accent);
   color: var(--accent2);
+}
+
+/* Icon-only keyboard toggle chip */
+.hint-chip.kbd-toggle {
+  font-size: 0.85rem;
+  padding: 0.22rem 0.55rem;
+  line-height: 1;
+}
+.hint-chip.kbd-toggle.active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent2);
+}
+
+/* ─── Keyboard Shortcuts Hint ────────────────────────────────────────────── */
+.kbd-shortcuts-hint {
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.55rem;
+  color: var(--text3);
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 1;
+  user-select: none;
 }
 
 /* ─── Confirm Overlay ────────────────────────────────────────────────────── */
@@ -706,9 +845,14 @@ main {
 @media (max-width: 700px) {
   .task-panel { width: 260px; }
   .transcript-area { max-width: 100%; padding: 0 1rem; }
+  .typing-bar { padding: 0 1rem; }
+  .kbd-shortcuts-hint { display: none; }
 }
 @media (max-width: 520px) {
   main { flex-direction: column; }
   .task-panel { width: 100%; height: 220px; border-right: none; border-bottom: 1px solid var(--border); }
   body { overflow: auto; }
+  .handsfree-toggle .handsfree-label { display: none; }
+  .handsfree-toggle { padding: 0.32rem 0.55rem; }
+  .header-right { gap: 0.6rem; }
 }

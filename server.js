@@ -129,6 +129,11 @@ wss.on('connection', async (ws) => {
     const userText = (msg.text || '').trim()
     if (!userText) return
 
+    const clientHistory = Array.isArray(msg.history) ? msg.history : null
+    const effectiveHistory = (clientHistory && clientHistory.length)
+      ? clientHistory
+      : state.conversationHistory
+
     try {
       // ── Handle pending delete confirmation ──────────────────────────────
       if (state.pendingConfirmation) {
@@ -143,7 +148,7 @@ wss.on('connection', async (ws) => {
 
           const ctx = {
             userMessage: userText,
-            history: state.conversationHistory,
+            history: effectiveHistory,
             tasks: [],
             intent: null,
             plan: { operations: [op], readFilter: null, planSummary: `Delete confirmed by user` },
@@ -194,7 +199,7 @@ wss.on('connection', async (ws) => {
       const tasksResult = await db.query('SELECT * FROM tasks ORDER BY date ASC, time ASC NULLS LAST')
       const context = {
         userMessage: userText,
-        history: state.conversationHistory,
+        history: effectiveHistory,
         tasks: tasksResult.rows,
         intent: null,
         plan: null,
