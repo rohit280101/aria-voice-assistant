@@ -16,6 +16,35 @@ User voice input flows through a 4-agent pipeline on the backend:
 - **ExecutionAgent**: executes operations against PostgreSQL
 - **ResponseAgent**: generates natural spoken responses (streamed)
 
+Agent pipeline status is shown live in the header (C → P → E → R).
+
+## Features
+
+### Voice Interaction
+- **Hands-free mode** — ARIA auto-restarts listening after each response; toggled via the header button or `H` key; state persisted in localStorage
+- **VAD barge-in** — interrupt ARIA mid-speech by speaking; Web Audio API detects voice activity (RMS > 0.015 for 300 ms)
+- **Silence detection** — transcript is submitted after 1800 ms of silence
+- **Typing fallback** — toggle a text input bar with the `⌨` button for environments without mic access; uses the same dispatch path as voice
+
+### Keyboard Shortcuts
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle listening on/off |
+| `Esc` | Interrupt ARIA mid-speech |
+| `H` | Toggle hands-free mode |
+
+### Task Management
+- Create, read, update, and delete tasks by voice
+- Task list with **All / Today / Tomorrow / Done** filters
+- Click any task checkbox to toggle its status (persisted to DB immediately)
+- Deletion requires voice confirmation ("yes" / "no") to prevent accidents
+- Multi-task batch operations with full confirmation for all affected tasks
+
+### Connection Resilience
+- WebSocket reconnects automatically with exponential backoff (up to 30 s)
+- Countdown shown in the status bar during reconnection
+- Client sends up to the last 8 conversation turns with every message so context is never lost on reconnect
+
 ## Setup
 
 ### Prerequisites
@@ -53,6 +82,16 @@ User voice input flows through a 4-agent pipeline on the backend:
 
 6. Open http://localhost:3000 in Chrome or Edge.
 
+## REST API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/tasks` | List all tasks |
+| `POST` | `/api/tasks` | Create a task |
+| `PUT` | `/api/tasks/:id` | Update a task (title, date, time, status, priority, category) |
+| `DELETE` | `/api/tasks/:id` | Delete a task |
+| `GET` | `/health` | Health check |
+
 ## Example Commands
 
 - "Create a task for team sync at 10 AM tomorrow"
@@ -72,6 +111,7 @@ User voice input flows through a 4-agent pipeline on the backend:
 - **AI**: Anthropic Claude claude-sonnet-4-20250514 (multi-agent + streaming)
 - **STT**: Web Speech API (browser-native)
 - **TTS**: Web Speech Synthesis API (browser-native)
+- **VAD**: Web Audio API (RMS-based voice activity detection)
 - **Storage**: PostgreSQL via pg
 
 ## Browser Support
